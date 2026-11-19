@@ -1,63 +1,82 @@
 # insta360-cloud-dl
 
-Insta360 云空间(Library)素材的 Linux 批量下载工具。纯 Python 标准库,零依赖。
+Bulk downloader for your Insta360 cloud library (Library/云空间) on **Linux**.
+Pure Python standard library, zero dependencies.
 
-官方只有 Android / Windows 客户端,本工具直接调用其网页端(Studio 网页)使用的私有 REST API,
-把云空间里的原始素材(.insv / .insp / .mp4 / .lrv)整批拉到本地 Linux 机器。
+Insta360 ships no Linux client (only Android / Windows). This tool talks
+directly to the private REST API used by their web player, so you can pull
+all original files (`.insv` / `.insp` / `.mp4` / `.lrv`) off the cloud in bulk.
 
-## 功能
+中文版: [README.zh.md](./README.zh.md)
 
-- `list` 拉取云空间全量素材清单(游标翻页,不限数量),可导出 CSV
-- `dl` 按 mediaId 下载,或 `--all` 全量下载
-  - 多路并发,全局限速(默认 8MB/s,防限流)
-  - 断点续传(`.part` 文件),中断后重跑同一条命令即可,已完成的自动跳过
-  - token 过期时自动调用 refreshToken 续期并回写本地
-  - 默认直连,不使用系统代理
+## Features
 
-## 准备工作
+- `list` — fetch the full cloud asset list (cursor pagination, no size cap), exportable to CSV
+- `dl` — download by `mediaId`, or `--all` for everything
+  - parallel downloads with a **global rate limit** (default 8 MB/s, avoid throttling)
+  - resumable (`.part` files): interrupt it and re-run the same command later;
+    finished files are skipped automatically
+  - expired tokens are refreshed automatically (`refreshToken`) and saved back
+  - direct connection by default; system proxy is explicitly disabled
+- `login` — interactive first-run: prints a step-by-step tutorial for grabbing
+  your token from the browser, validates it, saves it as `token.txt`
 
-1. 在浏览器(Chrome/Edge)登录 https://www.insta360.com/cn/account/login
-2. F12 → Application → Cookies → `insta_access_token`(域名 `.insta360.com`)
-3. 复制其值,保存为脚本同目录的 `token.txt`(一行,无引号)
-
-token 有效期约 30 天,脚本会在过期时自动续期;续期失败时重新从浏览器取一次即可。
-
-## 用法
+## Getting started
 
 ```bash
-# 列出云端全部素材
+# 1) one-time login: follow the on-screen tutorial, paste your token
+python3 i360dl.py login
+
+# 2) see what's in your cloud
 python3 i360dl.py list
 python3 i360dl.py list --csv i360_list.csv
 
-# 下载指定素材(参数是清单里的 mediaId)
-python3 i360dl.py dl 323671545639604224
-
-# 全量下载(慢速,后台跑)
-nohup python3 i360dl.py dl --all > dl_all.log 2>&1 &
-
-# 跳过 .lrv 低清代理文件(省 20~30% 空间)
-python3 i360dl.py dl --all --no-lrv
+# 3) download
+python3 i360dl.py dl 323671545639604224        # one asset (mediaId from list)
+nohup python3 i360dl.py dl --all > dl_all.log 2>&1 &   # everything, slow, in background
+python3 i360dl.py dl --all --no-lrv            # skip low-res .lrv proxies (~20-30% less)
 ```
 
-## 环境变量
+### How `login` works
 
-| 变量 | 默认 | 说明 |
+The API has no plain username/password login (web login is protected by a
+slider captcha), so the tool reuses your browser session:
+
+1. Log in at <https://www.insta360.com/cn/account/login> in Chrome/Edge
+2. F12 → **Application** → **Cookies** → `.insta360.com`
+3. Copy the value of the cookie `insta_access_token`, paste it into `login`
+
+The token lasts ~30 days; the tool auto-refreshes it and re-saves it, so you
+only have to log in again when the refresh itself fails.
+
+## Environment variables
+
+| Var | Default | Meaning |
 |---|---|---|
-| `I360_DL_ROOT` | `./downloads` | 下载根目录 |
-| `I360_RATE` | `8` | 全局限速,MB/s(所有并发合计) |
-| `I360_API` | `https://service-hz.insta360.com` | 区域专属云 API 主机。若你的账号区域不同,以 `GET https://service-c.insta360.com/cloud-subscription-service/user/v2/cloudBenefitInfo`(带 `X-User-Token` 头)返回的 `data.endpoint` 为准 |
-| `I360_REFRESH` | `https://openapi-c.insta360.com/account/v2/refreshToken` | token 续期端点 |
+| `I360_DL_ROOT` | `./downloads` | download destination directory |
+| `I360_RATE` | `8` | global speed cap, MB/s (all workers combined) |
+| `I360_API` | `https://service-hz.insta360.com` | region-specific cloud API host. If yours differs, read `data.endpoint` from `GET https://service-c.insta360.com/cloud-subscription-service/user/v2/cloudBenefitInfo` (with `X-User-Token` header) |
+| `I360_REFRESH` | `https://openapi-c.insta360.com/account/v2/refreshToken` | token refresh endpoint |
+| `I360_CHECK` | `https://openapi-c.insta360.com/account/v1/checkToken` | token validation endpoint |
 
-## 文件格式说明
+## File formats
 
-| 后缀 | 内容 |
+| Ext | Content |
 |---|---|
-| `.insv` | 全景视频原始文件。本质是 MP4 容器,含两路 HEVC 鱼眼视频流(前后镜头各一路)+ AAC 音轨,`mpv`/`ffmpeg` 可直接播放 |
-| `.insp` | 全景照片,JPEG(等距柱状全景 + Insta360 EXIF) |
-| `.mp4` | App 里"平视模式"导出的普通视频 |
-| `.lrv` | 低清代理文件(预览用),`--no-lrv` 可跳过 |
+| `.insv` | raw 360° video. It is a plain MP4 container with **two HEVC fisheye video streams** (front + back lens) + AAC audio. Plays directly in `mpv` / VLC / ffmpeg (`,` / `.` switch lens) |
+| `.insp` | 360° photo, JPEG (equirectangular + Insta360 EXIF) |
+| `.mp4` | flat (rectilinear) export from the app |
+| `.lrv` | low-resolution proxy for previews; skip with `--no-lrv` |
 
-## 免责声明
+Note: raw `.insv` is dual-fisheye, **not** a stitched 360° projection — the
+stitched look you see in the app is produced at export time.
 
-本工具仅供备份自己账号内的个人数据,使用私有接口,官方接口随时可能变更。
-使用者需自行承担使用本工具的后果,请遵守 Insta360 服务条款与当地法律。
+## Disclaimer
+
+This tool is meant for backing up **your own** data inside **your own** account.
+It uses private, undocumented APIs that may change or break at any time.
+Use at your own risk; comply with Insta360's terms of service and applicable law.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
