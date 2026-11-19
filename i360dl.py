@@ -2,6 +2,7 @@
 """Insta360 云视频 Linux 批量下载器(纯标准库)。
 
 用法:
+  python3 i360dl.py login                # 首次登录: 带教程, 粘贴浏览器 token
   python3 i360dl.py list                 # 列出云端全部素材(只读)
   python3 i360dl.py list --csv out.csv   # 导出清单
   python3 i360dl.py dl <mediaId> ...     # 下载指定素材(原始文件, 含 .lrv)
@@ -30,6 +31,8 @@ from datetime import datetime
 API_BASE = os.environ.get("I360_API", "https://service-hz.insta360.com")
 REFRESH_URL = os.environ.get(
     "I360_REFRESH", "https://openapi-c.insta360.com/account/v2/refreshToken")
+CHECK_URL = os.environ.get(
+    "I360_CHECK", "https://openapi-c.insta360.com/account/v1/checkToken")
 TOKEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "token.txt")
 DL_ROOT = os.environ.get("I360_DL_ROOT", "./downloads")
 CHUNK = 1 * 1024 * 1024          # 1MB 分块, 便于限速
@@ -77,8 +80,8 @@ def headers(token):
 
 
 class Api:
-    def __init__(self):
-        self.token = load_token()
+    def __init__(self, token=None):
+        self.token = token or load_token()
 
     def _get(self, url, params=None, token=None):
         tok = token or self.token
@@ -164,6 +167,39 @@ def fmt_ts(ms):
     if not ms:
         return ""
     return datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
+
+
+def _mask_phone(p):
+    p = str(p or "")
+    return p[:3] + "****" + p[-4:] if len(p) >= 7 else "***"
+
+
+def cmd_login(args):
+    print("""
+== Get your token from the browser (一次性, 之后自动续期) ==
+  1. Open https://www.insta360.com/cn/account/login in Chrome/Edge and log in
+  2. Press F12 → Application → Cookies → .insta360.com
+  3. Copy the VALUE of the cookie named  insta_access_token
+
+== 从浏览器获取 token(一次性, 之后脚本自动续期) ==
+  1. 用 Chrome/Edge 打开 https://www.insta360.com/cn/account/login 并登录
+  2. 按 F12 → Application(应用) → Cookies → .insta360.com
+  3. 复制名为  insta_access_token  的 cookie 的值
+""")
+    try:
+        tok = input("Paste token (粘贴后回车): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        sys.exit(1)
+    if not tok:
+        sys.exit("empty token")
+    r = Api(token=tok)._get(CHECK_URL)
+    acct = (((r.get("data") or {}).get("account")) or {})
+    if r.get("code") != 0 or not acct:
+        sys.exit(f"token 校验失败: {r}")
+    save_token(tok)
+    phone = acct.get("phone") or acct.get("phoneNumber") or ""
+    log(f"登录成功: account id={acct.get('id')} phone={_mask_phone(phone)} "
+        f"country={acct.get('country')} | token 已保存到 {TOKEN_FILE}")
 
 
 def cmd_list(args):
@@ -323,6 +359,8 @@ if __name__ == "__main__":
     a = sys.argv[1:]
     if not a or a[0] == "list":
         cmd_list(a[1:])
+    elif a[0] == "login":
+        cmd_login(a[1:])
     elif a[0] == "dl":
         cmd_dl(a[1:])
     else:
