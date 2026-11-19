@@ -1,0 +1,6 @@
+# token.txt
+downloads/
+*.log
+*.csv
+*.part
+__pycache__/
